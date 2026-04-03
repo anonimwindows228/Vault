@@ -10,6 +10,28 @@ Thank you very much to @Kflone5 for help with UI development!!
 <img width="150" height="100" alt="Снимок экрана 2026-04-01 185827" src="https://github.com/user-attachments/assets/e2516577-63ea-4ef3-bf2a-a4a080946870" />
 <img width="150" height="100" alt="Снимок экрана 2026-04-01 185833" src="https://github.com/user-attachments/assets/7533e9b1-756e-4e40-9b17-60f781e72913" />
 
+Lates patch:
+
+WinVFE (Vault) 1.1.5 Patch
+03.04.2026
+
+Fixed:
+
+    Files not encrypting properly due to missing function
+    Files not decrypting properly due to missing function
+    Compress and encrypt buttons going out of window bounds when adding multiple files
+
+Removed:
+
+    zstd compression algorithm
+    lz4 compression algorithm
+
+Added:
+
+    7z compression algorithm
+    Multiple files encryption (encrypted archive)
+    UI minor fixes (adding multiple files throughout a period of time not at once etc..)
+
 
 What's new:
 
@@ -31,8 +53,7 @@ Blowfish-CBC
 # Compression
 
 zlib
-zstd (coming soon)
-lz4 (coming soon)
+7z
 ```
 
 
