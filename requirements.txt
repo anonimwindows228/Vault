@@ -1,0 +1,5 @@
+cryptography
+pycryptodomex
+pyzipper
+Pillow
+tkinterdnd2
