@@ -3,6 +3,7 @@ import json
 import os
 import struct
 import zlib
+import lzma
 
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -10,19 +11,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 
 try:
-    import zstandard as zstd
-    _ZSTD_OK = True
+    import pyzipper as _pyzipper
+    _PYZIPPER_OK = True
 except ModuleNotFoundError:
-    _ZSTD_OK = False
-
-try:
-    import lz4.frame as _lz4
-    _LZ4_OK = True
-except ModuleNotFoundError:
-    _LZ4_OK = False
-
-import lzma
-_7Z_OK = True
+    _PYZIPPER_OK = False
 
 MAGIC      = b"VAULTVZ1"
 MAGIC_SIZE = 8
@@ -30,83 +22,68 @@ SALT_SIZE  = 32
 NONCE_SIZE = 12
 ITERATIONS = 600_000
 
-ALGORITHMS = ["zlib", "7z"]
+ALGORITHMS = ["zip", "7z"]
+
 
 def _derive_key(password: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
                      salt=salt, iterations=ITERATIONS)
     return kdf.derive(password.encode())
 
-def _compress(data: bytes, algorithm: str) -> bytes:
-    if algorithm == "7z":
-        return lzma.compress(data, format=lzma.FORMAT_XZ, preset=9)
-    if algorithm == "lz4":
-        if not _LZ4_OK:
-            raise RuntimeError("lz4 not installed, run: pip install lz4")
-        return _lz4.compress(data, compression_level=_lz4.COMPRESSIONLEVEL_MAX)
-    return zlib.compress(data, level=9)
-
 
 def _decompress(data: bytes, algorithm: str) -> bytes:
     if algorithm == "7z":
         return lzma.decompress(data, format=lzma.FORMAT_XZ)
-    if algorithm == "zstd":
-        if not _ZSTD_OK:
-            raise RuntimeError("zstandard not installed, run: pip install zstandard")
-        return zstd.ZstdDecompressor().decompress(data)
-    if algorithm == "lz4":
-        if not _LZ4_OK:
-            raise RuntimeError("lz4 not installed, run: pip install lz4")
-        return _lz4.decompress(data)
     return zlib.decompress(data)
 
 
 def available_algorithms() -> list[str]:
-    out = ["zlib", "7z"]   # lzma
-    if _ZSTD_OK: out.append("zstd")
-    if _LZ4_OK:  out.append("lz4")
-    return out
+    return ["zip", "7z"]
+
 
 def compress_file(input_path: str, output_path: str,
-                  algorithm: str = "zlib",
+                  algorithm: str = "zip",
                   password: str = "",
                   metadata: dict | None = None,
                   progress=None) -> None:
+    import zipfile as _zf
+
     def p(v, m=""): progress and progress(v, m)
 
-    p(0.05, "Reading file…")
-    with open(input_path, "rb") as f:
-        raw = f.read()
+    if algorithm == "zip":
+        p(0.05, "Reading file…")
+        p(0.20, "Compressing with ZIP…")
+        if password:
+            if not _PYZIPPER_OK:
+                raise RuntimeError(
+                    "AES-encrypted ZIP requires pyzipper.\n"
+                    "Run:  pip install pyzipper")
+            with _pyzipper.AESZipFile(output_path, "w",
+                                      compression=_pyzipper.ZIP_DEFLATED,
+                                      encryption=_pyzipper.WZ_AES) as zf:
+                zf.setpassword(password.encode("utf-8"))
+                p(0.60, "Encrypting & writing…")
+                zf.write(input_path, os.path.basename(input_path))
+        else:
+            with _zf.ZipFile(output_path, "w",
+                             _zf.ZIP_DEFLATED, compresslevel=9) as zf:
+                zf.write(input_path, os.path.basename(input_path))
+        p(1.00, "Done.")
+        return
 
-    meta = {
-        "original_name": os.path.basename(input_path),
-        "original_size": len(raw),
-        "algorithm":     algorithm,
-        "encrypted":     bool(password),
-    }
-    if metadata:
-        meta.update(metadata)
+    if algorithm == "7z":
+        p(0.05, "Reading file…")
+        with open(input_path, "rb") as f:
+            raw = f.read()
+        p(0.30, "Compressing with LZMA/XZ…")
+        compressed = lzma.compress(raw, format=lzma.FORMAT_XZ, preset=9)
+        p(0.90, "Writing output file…")
+        with open(output_path, "wb") as f:
+            f.write(compressed)
+        p(1.00, "Done.")
+        return
 
-    meta_bytes = json.dumps(meta, ensure_ascii=False).encode("utf-8")
-    meta_len   = struct.pack("<I", len(meta_bytes))
-
-    p(0.20, f"Compressing with {algorithm}…")
-    compressed = _compress(raw, algorithm)
-
-    if password:
-        salt  = os.urandom(SALT_SIZE)
-        nonce = os.urandom(NONCE_SIZE)
-        key   = _derive_key(password, salt)
-        p(0.80, "Encrypting compressed data…")
-        payload = salt + nonce + AESGCM(key).encrypt(nonce, compressed, None)
-    else:
-        payload = compressed
-
-    p(0.95, "Writing output file…")
-    with open(output_path, "wb") as f:
-        f.write(MAGIC + meta_len + meta_bytes + payload)
-
-    p(1.00, "Done.")
+    raise ValueError(f"Unsupported algorithm: {algorithm!r}. Use 'zip' or '7z'.")
 
 
 def decompress_file(input_path: str, output_dir: str,
@@ -116,10 +93,67 @@ def decompress_file(input_path: str, output_dir: str,
 
     p(0.05, "Reading file…")
     with open(input_path, "rb") as f:
-        data = f.read()
+        header = f.read(MAGIC_SIZE)
 
-    if data[:MAGIC_SIZE] != MAGIC:
-        raise ValueError("Not a valid .vz file.")
+    if header[:4] == b"PK\x03\x04" or input_path.lower().endswith(".zip"):
+        p(0.20, "Detected ZIP archive…")
+        from crypto import safe_output_path
+        extracted = []
+
+        if _PYZIPPER_OK:
+            opener = _pyzipper.AESZipFile(input_path, "r")
+        else:
+            import zipfile as _zf
+            opener = _zf.ZipFile(input_path, "r")
+
+        with opener as zf:
+            if password:
+                zf.setpassword(password.encode("utf-8"))
+            names = zf.namelist()
+            for i, name in enumerate(names):
+                p(0.20 + 0.75 * i / max(len(names), 1), f"Extracting {name}…")
+                out_path = safe_output_path(os.path.join(output_dir, name))
+                with zf.open(name) as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+                extracted.append(out_path)
+        p(1.00, "Done.")
+        first = extracted[0] if extracted else output_dir
+        return first, {"algorithm": "zip", "files": len(extracted)}
+
+    if header[:6] == b"\xfd7zXZ\x00" or input_path.lower().endswith(".7z"):
+        p(0.20, "Detected 7z/XZ archive…")
+        from crypto import safe_output_path
+        with open(input_path, "rb") as f:
+            raw = lzma.decompress(f.read(), format=lzma.FORMAT_XZ)
+        import zipfile as _zf
+        if raw[:4] == b"PK\x03\x04":
+            extracted = []
+            with _zf.ZipFile(io.BytesIO(raw)) as zf:
+                names = zf.namelist()
+                for i, name in enumerate(names):
+                    p(0.60 + 0.35 * i / max(len(names), 1), f"Extracting {name}…")
+                    out_path = safe_output_path(os.path.join(output_dir, name))
+                    with zf.open(name) as src, open(out_path, "wb") as dst:
+                        dst.write(src.read())
+                    extracted.append(out_path)
+            p(1.00, "Done.")
+            return extracted[0] if extracted else output_dir, \
+                   {"algorithm": "7z", "files": len(extracted)}
+        else:
+            out_name = os.path.splitext(os.path.basename(input_path))[0]
+            out_path = safe_output_path(os.path.join(output_dir, out_name))
+            p(0.90, "Writing output file…")
+            with open(out_path, "wb") as f:
+                f.write(raw)
+            p(1.00, "Done.")
+            return out_path, {"algorithm": "7z"}
+
+    if header[:MAGIC_SIZE] != MAGIC:
+        raise ValueError("Unsupported file format. Supported: .zip, .7z, .vz")
+
+    p(0.10, "Reading .vz file…")
+    with open(input_path, "rb") as f:
+        data = f.read()
 
     offset   = MAGIC_SIZE
     meta_len = struct.unpack_from("<I", data, offset)[0]
@@ -130,12 +164,12 @@ def decompress_file(input_path: str, output_dir: str,
 
     algorithm     = meta.get("algorithm", "zlib")
     encrypted     = meta.get("encrypted", False)
-    original_name = meta.get("original_name", os.path.splitext(
-                                os.path.basename(input_path))[0])
+    original_name = meta.get("original_name",
+                             os.path.splitext(os.path.basename(input_path))[0])
 
     if encrypted:
         if not password:
-            raise ValueError("This archive is encrypted;please enter a password.")
+            raise ValueError("This archive is encrypted — please enter a password.")
         salt  = payload[:SALT_SIZE]
         nonce = payload[SALT_SIZE: SALT_SIZE + NONCE_SIZE]
         ct    = payload[SALT_SIZE + NONCE_SIZE:]
@@ -156,11 +190,9 @@ def decompress_file(input_path: str, output_dir: str,
 
     from crypto import safe_output_path
     out_path = safe_output_path(os.path.join(output_dir, original_name))
-
     p(0.95, "Writing output file…")
     with open(out_path, "wb") as f:
         f.write(raw)
-
     p(1.00, "Done.")
     return out_path, meta
 
@@ -168,8 +200,23 @@ def decompress_file(input_path: str, output_dir: str,
 def read_metadata(input_path: str) -> dict:
     with open(input_path, "rb") as f:
         header = f.read(MAGIC_SIZE + 4)
+    if header[:4] == b"PK\x03\x04" or input_path.lower().endswith(".zip"):
+        import zipfile as _zf
+        try:
+            with _zf.ZipFile(input_path) as zf:
+                names = zf.namelist()
+        except Exception:
+            names = []
+        return {"algorithm": "zip",
+                "original_name": os.path.basename(input_path),
+                "original_size": os.path.getsize(input_path),
+                "files": names}
+    if header[:6] == b"\xfd7zXZ\x00" or input_path.lower().endswith(".7z"):
+        return {"algorithm": "7z",
+                "original_name": os.path.basename(input_path),
+                "original_size": os.path.getsize(input_path)}
     if header[:MAGIC_SIZE] != MAGIC:
-        raise ValueError("Not a valid .vz file.")
+        raise ValueError("Unsupported file format.")
     meta_len = struct.unpack_from("<I", header, MAGIC_SIZE)[0]
     with open(input_path, "rb") as f:
         f.seek(MAGIC_SIZE + 4)
