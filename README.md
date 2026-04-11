@@ -18,24 +18,31 @@ Lates version:
 _06.04.2026_
 
 ### New features
-- **Right-click context menu** - Encrypt, Decrypt, Compress, Decompress with WinVFE now appear when right-clicking any file in Windows Explorer. Installed automatically via the Inno Setup installer.
-- **Windows installer** - `WinVFE_Setup_v1.5.1.exe` built with Inno Setup. Installs to Program Files, writes registry keys, creates Start Menu and desktop shortcuts, includes a working uninstaller.
-- **Encrypted ZIP support** - ZIP archives can now be password-protected using AES-256 encryption via `pyzipper`. Requires `pip install pyzipper`.
-- **Open folder button** -After any compress/encrypt/decrypt operation, a button appears next to the result label to open the output folder directly in Explorer.
-- **Progress popup** -Replaced the inline progress bar with a progress bar that appears during long operations.
-- **Wizard** - Now wizard features app information.
-- **New versions** - WinVFE now features new version checker, which will trigger a pop up if new release published on github.
+WinVFE (Vault) 1.5.2
+10.04.2026
 
-**Compression changes**
-- Removed the custom `.vz` format from the Compress tab -Compress now produces real `.zip` or `.7z` files that open in any archive tool.
-- `.vz` files can still be decompressed (legacy support kept in `decompress_file`).
-- Removed zlib, zstd, lz4 algorithm options from the Compress tab.
-- Removed the metadata note feature from the Compress tab.
+Fixed:
 
-### Bug fixes
-- Decompress browse filter now accepts `.zip` and `.7z` in addition to `.vz`.
-- Multi-file ZIP compression no longer double-wraps (was bundling into a temp zip then recompressing into `.vz`).
-- Output filenames now use the correct extension (`.zip` / `.7z`) instead of always `.vz`.
+    Algorithm button styling (removed circle and bold-text resizing on click)
+    UI scaling issues (removed scrolling and adjusted fixed window dimensions)
+    General stability when handling large file queues
+
+Removed:
+
+    Legacy Blowfish-CBC encryption support
+    Password strength meter (for improved UI performance and clarity)
+    Manual algorithm selection for Decryption (now handled by auto-detection)
+    Divider lines and subtitles from the Wizard/Start page
+
+Added:
+
+    RAR compression support (requires WinRAR/rar.exe in System PATH)
+    Multi-threaded processing for Encryption, Decryption, and Compression
+    Secure File Shredding (3-pass overwrite before deletion)
+    "Delete archive after decompression" and "Delete .vault after decryption" options
+    Normal vs. Best compression level toggles
+    Result Dialog popups with "Open Folder" shortcut upon completion
+    Footer link buttons for GitHub, Organisation, and Support in the Wizard tab
  
 Algorithms:
 ```
